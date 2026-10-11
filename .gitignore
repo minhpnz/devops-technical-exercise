@@ -1,3 +1,9 @@
 /greeter
 app/greeter
 .DS_Store
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+.kubeconfig
+.greeter-image.tar
