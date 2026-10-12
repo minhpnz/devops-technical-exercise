@@ -60,6 +60,7 @@ lint:
 	  { echo "chart must refuse to render without greetingName"; exit 1; }
 	helm template greeter charts/greeter --set greetingName=lint --set service.nodePort=30080 \
 	  | kubeconform -strict -summary -kubernetes-version 1.37.0 -
+	scripts/check-timing.sh
 	$(TF) fmt -recursive -check infra
 	@for e in $(ENVS); do (cd infra/$$e && $(TF) init -backend=false -input=false >/dev/null && $(TF) validate -no-color) || exit 1; done
 
