@@ -1,0 +1,20 @@
+groups:
+  - name: greeter
+    rules:
+      # Page when prod returns more than 1 error per second for 30 seconds.
+      # for: 30s is short so the alert can be demonstrated quickly; see DECISIONS.
+      # Probe paths are excluded: /readyz returns 503 by design during warm-up
+      # and drain, so without the filter every rollout would page.
+      - alert: GreeterProdErrors
+        expr: |
+          sum(rate(greeter_http_requests_total{namespace="greeter-prod", status=~"5..", path!~"/healthz|/readyz"}[1m])) > 1
+        for: 30s
+        labels:
+          severity: page
+        annotations:
+          summary: "greeter prod: {{ $value | humanize }} errors per second"
+          description: >-
+            Prod has returned more than 1 5xx per second (excluding probes) for 30
+            seconds. Check recent rollouts first (kubectl -n greeter-prod rollout
+            history deploy/greeter), then which path is failing in Prometheus:
+            sum by (path, status) (rate(greeter_http_requests_total{namespace="greeter-prod", status=~"5.."}[1m]))

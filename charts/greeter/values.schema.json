@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["greetingName", "replicas"],
+  "properties": {
+    "greetingName": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "GREETING_NAME. The app refuses to start without it."
+    },
+    "replicas": {
+      "type": "integer",
+      "minimum": 2,
+      "description": "With one replica the PDB lets a drain evict the only pod."
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "nodePort": {
+          "type": ["integer", "null"],
+          "minimum": 30000,
+          "maximum": 32767
+        }
+      }
+    }
+  }
+}

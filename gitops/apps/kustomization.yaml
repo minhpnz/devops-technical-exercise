@@ -1,0 +1,6 @@
+# Root of what Flux reconciles (Kustomization flux-system/apps, path ./gitops/apps).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - dev
+  - prod

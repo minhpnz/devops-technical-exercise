@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "greeter.labels" . | nindent 4 }}
+spec:
+  # "At most one down at a time" holds at any replica count; minAvailable: 1
+  # would let a drain take two of three prod pods at once.
+  maxUnavailable: 1
+  # A pod that isn't ready isn't serving, so it shouldn't block a drain.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      {{- include "greeter.selectorLabels" . | nindent 6 }}

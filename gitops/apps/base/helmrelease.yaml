@@ -1,0 +1,30 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: greeter
+spec:
+  # Same release name and namespace Terraform used, so the controller upgrades
+  # the existing release instead of installing a second copy.
+  releaseName: greeter
+  interval: 10m
+  timeout: 5m
+  chart:
+    spec:
+      chart: ./charts/greeter
+      sourceRef:
+        kind: GitRepository
+        name: greeter
+        namespace: flux-system
+      # Rebuild the chart on every new commit, not only when Chart.yaml's
+      # version is bumped - the same trap the Terraform module works around.
+      reconcileStrategy: Revision
+  install:
+    remediation:
+      retries: 2
+  upgrade:
+    remediation:
+      retries: 2
+      remediateLastFailure: true
+  # Puts back anything changed by hand with kubectl.
+  driftDetection:
+    mode: enabled

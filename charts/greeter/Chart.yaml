@@ -1,0 +1,7 @@
+apiVersion: v2
+name: greeter
+description: The greeter HTTP service.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.31.0-0"

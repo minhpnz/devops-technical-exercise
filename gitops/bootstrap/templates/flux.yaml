@@ -1,0 +1,30 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: greeter
+  namespace: flux-system
+spec:
+  url: http://git-server.gitops.svc.cluster.local/greeter.git
+  ref:
+    branch: {{ .Values.branch }}
+  interval: {{ .Values.interval }}
+  ignore: |
+    /*
+    !/charts/
+    !/gitops/apps/
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps
+  namespace: flux-system
+spec:
+  sourceRef:
+    kind: GitRepository
+    name: greeter
+  path: ./gitops/apps
+  interval: 10m
+  prune: true
+  # Ready only once both HelmReleases are Ready.
+  wait: true
+  timeout: 5m

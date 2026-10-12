@@ -1,0 +1,14 @@
+# Only the three controllers this needs: no image automation (images are
+# side-loaded into kind, not pulled from a registry) and no notification
+# controller (no webhooks or alert sinks locally). Tags carry the digest.
+imageAutomationController: {create: false}
+imageReflectionController: {create: false}
+notificationController: {create: false}
+sourceController:
+  tag: v1.9.5@sha256:6f20d232d596a758c923d2861f23511718fc303b8a2e36a1434a7c736b9f4268
+kustomizeController:
+  tag: v1.9.5@sha256:a3a955eb2bc432c2eaa94d2d3714e3beae7fdf17586fd23aadf71ab597ac3339
+helmController:
+  tag: v1.6.4@sha256:8ff15409e46d354338045f483d58ca9cb35dffa2f87e4addd1f5eba1e6a9175f
+cli:
+  tag: v2.9.5@sha256:704d5529535570a495249b643159c93a9aa88ffca07813c974a54b7ba6edbd86

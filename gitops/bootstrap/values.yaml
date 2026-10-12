@@ -1,0 +1,7 @@
+gitServer:
+  image: git-server:0.1.2
+# What Flux watches. Only the chart and the app manifests are fetched, so
+# commits that only touch evidence/ or docs still produce a new revision, but
+# a much smaller artifact.
+branch: main
+interval: 1m

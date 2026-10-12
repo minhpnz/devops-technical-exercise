@@ -1,0 +1,5 @@
+apiVersion: v2
+name: gitops-bootstrap
+description: In-cluster git server plus the two Flux objects that point at it.
+type: application
+version: 0.1.0
