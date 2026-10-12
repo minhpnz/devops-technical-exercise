@@ -158,10 +158,14 @@ is why the grace period below is calculated rather than left at the default.
 - **Readiness timing vs. routing.**
   - The 10 s shutdown delay assumes kube-proxy removes the pod's endpoint within about
     6 s of it turning not-ready.
-  - On a busy cluster, or behind a cloud load balancer with its own health checks, that
-    may not hold.
-  - The rolling-update drill (extension D) is how I'd find out. If requests fail there,
-    I'd add a `preStop` sleep or lengthen the delay.
+  - The drills (extension D) back this up on kind: no request failed. Behind a cloud
+    load balancer with its own health checks, deregistration can take longer, and I'd
+    re-measure before trusting 10 s.
+- **Keep-alive clients are untested.** The drill's load opens a new connection per
+  request. A client holding one connection open stays pinned to the old pod (conntrack)
+  until that pod closes the listener, so it relies on the app closing idle connections
+  cleanly. I'd add a keep-alive client to the drill before calling this proven.
+- **The alert counts errors rather than measuring a ratio** (see extension B).
 - **Dev has 2 replicas with `maxUnavailable: 1`.** During a drain dev drops to half
   capacity. That's acceptable for dev, but it's the reason replicas can't go below 2.
 - **`DoNotSchedule`.**
@@ -197,6 +201,9 @@ is why the grace period below is calculated rather than left at the default.
   than tag. Base-image digest bumps automated with Dependabot or Renovate.
 - **Terraform:** remote state with locking. Separate clusters and credentials per
   environment, with prod applied only from CI after the plan has been reviewed.
+- **Delivery:** Terraform for the platform (cluster, network, IAM, a one-off Flux
+  bootstrap); Flux for every application from the start, with no Terraform-owned
+  releases to hand over (see extension C).
 - **Traffic:** a real load balancer or Ingress, with the shutdown delay tuned against its
   deregistration time.
 - **Capacity:** an HPA, and resource sizes taken from load tests rather than guesses.
@@ -206,21 +213,164 @@ is why the grace period below is calculated rather than left at the default.
 
 - **HPA, NetworkPolicy, Ingress, ServiceAccount, ConfigMap.** Each would be a file I
   couldn't justify for this service on a local cluster.
-- **Secrets.** There are none. The only configuration is a greeting name.
-- **The `/metrics` scrape config.** It belongs to extension B rather than the core chart.
+- **Secrets in the repository.** There are none. The app's only configuration is a
+  greeting name, and the one credential in the setup (Flux's deploy key, extension C)
+  lives only in a Secret in the cluster.
+- **The drills in CI.** See extension A.
 
 ## Extensions: order and status
 
-I chose this order:
+Done in this order: **D → A → B → C**.
 
 1. **D – prove it survives.** The core tasks claim zero-downtime drains and rollouts, and
-   this is the only extension that tests that claim.
-2. **B – observability.** An alert I'd want to be woken up for is the next thing a real
-   on-call needs.
-3. **A – CI.** The Dockerfile's test target already does most of what a pipeline would
-   run.
-4. **C – GitOps.** It is the most plumbing for the least new evidence about the service
-   itself.
+   this is the only extension that tests that claim. If it had failed, the chart was
+   wrong and everything after it would be built on that.
+2. **A – CI.** Once D showed the config works, CI keeps it working: every push re-checks
+   what a reviewer would otherwise have to trust.
+3. **B – observability.** An alert is only worth having once the system it watches is
+   known to behave (D) and stays that way (A).
+4. **C – GitOps.** Mostly plumbing, and it conflicts with task 4: Terraform owns the
+   releases, so adopting Flux means handing ownership over safely.
 
-**Status:** not started yet. When an extension is done, its evidence will go in
-`evidence/drills/`, `evidence/alert/`, `evidence/ci/` or `evidence/gitops/`.
+### D – prove it survives
+
+Evidence: [`evidence/drills/`](evidence/drills/) (screenshots, explained in
+[`evidence/README.md`](evidence/README.md)).
+
+- **Method:** three terminals side by side: continuous load (`scripts/load.sh`), pod
+  changes with timestamps (`scripts/watch-pods.sh`), and the command causing the
+  disruption. The load starts before the disruption and stops after the last old pod
+  has exited.
+  - The load includes a 3 s request in a loop, so a request is always in flight when a
+    pod gets SIGTERM.
+- **Rolling update** (prod greeting changed through `terraform apply`): 0 failed
+  requests. An old pod got SIGTERM only once its replacement was Ready. Each old pod
+  exited about 11 s after SIGTERM, well inside the 35 s grace period.
+- **Drain** of a worker: 0 failed requests. The difference from a rollout: a drain
+  removes first and replaces second.
+  - Prod ran on 2 pods during the replacement's 30 s warm-up.
+  - When the node held two prod pods, the PDB refused the second eviction until the
+    first replacement was Ready.
+- **What I learned the hard way:** draining a second node while the first was still
+  cordoned put every replica on the one remaining worker.
+  - No request failed, so nothing flagged it, but the service no longer survived a node
+    loss.
+  - Pods also don't move back after `uncordon`.
+  - Check `kubectl get nodes` for `SchedulingDisabled` before draining.
+
+### A – CI
+
+`.github/workflows/ci.yml`, three jobs:
+
+- **`static`:** actionlint, shellcheck, hadolint, `make lint`, `make rules-test`, and two
+  checks of my own:
+  - **lock files:** they cover all 4 platforms, so `terraform init` works on a Mac with
+    Apple silicon and on the Linux runner alike;
+  - **`scripts/check-images.sh`:** every image `make up` pulls is digest-pinned and has
+    an arm64 build.
+- **`image`:** the Dockerfile's test stage (`go vet`, `go test -race`), the build, an
+  arm64 cross-build, and a Trivy scan.
+- **`e2e`:** `make up` on a fresh runner: cluster, image, both environments, smoke test.
+- **Actions are pinned to commit SHAs**, and Dependabot proposes updates for actions,
+  base images and Terraform providers.
+- **The drills are not in CI, on purpose.** A rollout under load on a 2-vCPU runner adds
+  about 8 minutes per push and fails falsely when the runner starves itself.
+  - Instead, `scripts/check-timing.sh` (in `make lint`) checks the two numbers
+    zero-downtime depends on. It takes under a second.
+  - The first check: readiness detection plus 2 s propagation must fit inside
+    `SHUTDOWN_DELAY`.
+  - The second check: delay plus drain must fit inside the grace period.
+  - Shortening `SHUTDOWN_DELAY` to 3 s now fails lint, where before it would have passed
+    every check and dropped requests.
+  - For a service that changes often I'd still run the drill nightly.
+
+### B – observability
+
+Prometheus server only (no Alertmanager or exporters), in its own Terraform root
+(`infra/monitoring`), scraping every 15 s. One rule, `GreeterProdErrors`:
+
+```
+sum(rate(greeter_http_requests_total{namespace="greeter-prod", status=~"5..", path!~"/healthz|/readyz"}[1m])) > 1
+for: 30s
+```
+
+- **Probe paths are excluded.** `/readyz` returns 503 by design during every warm-up and
+  drain, so without the filter every rollout would page someone.
+- **Prod only.** Dev failing at the same rate never pages, and the demo shows both side
+  by side.
+- **`promtool` unit tests** (`make rules-test`, also in CI) cover four cases:
+  - prod errors fire;
+  - dev errors don't;
+  - errors under the threshold don't;
+  - `/readyz` 503s during a rollout don't.
+  - Removing the probe filter makes the last test fail, so the test really guards it.
+- **What I'd change for production:**
+  - **A ratio rather than a count.** More than 1 error per second is nothing at
+    1000 req/s and a lot at 2 req/s. I'd use errors / total with a minimum-traffic
+    floor, or better a multi-window burn-rate alert against an SLO.
+  - **`for: 30s` is short so the alert can be demonstrated in about a minute.** In
+    production I'd use 5 minutes or more: an alert that fires for incidents that fix
+    themselves teaches people to ignore the pager.
+  - **The blind spot:** if every pod is down there are no metrics, and this rule stays
+    silent. A second alert on `greeter_ready`, plus a blackbox probe from outside, would
+    cover it.
+
+### C – GitOps
+
+Flux (source, kustomize and helm controllers only; images pinned by digest) reconciles
+`gitops/apps/{dev,prod}.yaml` from the `solution` branch on GitHub. A commit that changes
+a HelmRelease's values rolls the cluster within a minute, with no deploy command run.
+
+- **Who owns what.**
+  - Flux owns the two app releases: the HelmReleases reuse the release name and
+    namespace Terraform created, so Flux upgrades them in place and no pod is replaced.
+  - Terraform keeps `infra/monitoring`.
+- **Hand-over order: Flux takes over first, Terraform lets go second.**
+  `terraform state rm` runs only after both HelmReleases report Ready.
+  - Done the other way round, a Flux failure (wrong key, unpushed commit) would leave
+    the releases with no owner.
+  - `make deploy-*` refuses to run once a HelmRelease exists, so Terraform can't
+    overwrite what Flux owns.
+- **Authentication: a deploy key, set up as for a private repository** (it works the
+  same if the repository is public).
+  - The key is generated for Flux alone, never my personal SSH key or a token.
+  - It is read-only and scoped to this one repository.
+  - It lives only in the `greeter-repo` Secret in the cluster; the private key file is
+    deleted after the Secret is created, and it never enters git.
+  - GitHub's host keys come from `api.github.com/meta` over HTTPS, rather than trusting
+    whatever `ssh-keyscan` sees first.
+  - The cost: to run the GitOps part themselves, a reviewer forks the repository,
+    creates their own deploy key and changes the `url` in
+    `gitops/flux-system/sync.yaml`.
+  - In production I'd use a GitHub App (short-lived, rotated tokens), with secrets
+    managed by SOPS or External Secrets instead of created by hand.
+- **Bootstrapped by hand.** `helm install` for Flux and `kubectl apply` for
+  `sync.yaml`, because this only runs on my machine.
+- **Why a hand-over at all.** Task 4 asks for Terraform to deploy the releases, so
+  Terraform creates them first and Flux takes them over afterwards. That is what makes
+  the `state rm` ordering necessary.
+- **What I'd do in production instead: Terraform bootstraps Flux and never owns the
+  apps.** This follows the approach the Flux maintainers recommend
+  ([Flux blog, April 2026](https://fluxcd.io/blog/2026/04/terraform-flux-operator-bootstrap/)):
+  - Terraform runs one bootstrap Job, via the Flux Operator module, in the same root
+    that creates the cluster. The Job installs Flux only if it is missing, then Flux
+    adopts itself and every application from Git.
+  - Terraform never holds those objects in its state. So there is no `state rm`
+    hand-over to get wrong, no guard needed on `make deploy`, and `terraform plan` stays
+    clean afterwards.
+  - The Git credential goes in as a sensitive input of which only a hash is stored, so
+    the key never lands in `terraform.tfstate`.
+  - That matters: creating the same Secret with the `kubernetes_secret` resource would
+    put the private key in the state in plain text.
+  - The trade-off is that `terraform plan` no longer shows what changes in the cluster;
+    the review moves to the Git diff. For platform components that change rarely, I'd
+    accept that.
+  - I didn't use it here because it would replace task 4 rather than build on it, and it
+    adds Flux Operator, `FluxInstance` and a new module for two releases on a local
+    cluster.
+- **Left out:**
+  - a way to hand the releases back to Terraform (suspend the HelmRelease, delete it,
+    `terraform import`);
+  - image automation, since there is no registry.
+
+Evidence: [`evidence/gitops/`](evidence/gitops/), to be added once the demo is recorded.

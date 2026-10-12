@@ -5,7 +5,7 @@ metadata:
   name: greeter
 spec:
   values:
-    greetingName: Production
+    greetingName: Production via GitOps
     replicas: 3
     image:
       tag: "0.1.0"

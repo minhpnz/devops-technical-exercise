@@ -36,6 +36,9 @@ up: cluster image load deploy monitoring smoke
 deploy: $(addprefix deploy-,$(ENVS))
 
 $(addprefix deploy-,$(ENVS)): deploy-%:
+	@# Once Flux owns a release, Terraform must not create or change it.
+	@if kubectl --context $(CONTEXT) -n greeter-$* get helmrelease greeter >/dev/null 2>&1; then \
+	  echo "greeter-$* is owned by Flux: change gitops/apps/$*/values.yaml and push"; exit 1; fi
 	cd infra/$* && $(TF) init -input=false >/dev/null && \
 	  $(TF) apply -input=false -auto-approve $(if $(IMAGE_TAG),-var image_tag=$(IMAGE_TAG))
 
