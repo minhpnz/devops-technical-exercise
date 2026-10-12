@@ -1,0 +1,128 @@
+name: ci
+
+# PRs, plus pushes to main. Pushes to a PR branch would otherwise run twice.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Tool versions match what the repo was developed and verified against.
+env:
+  KIND_VERSION: v0.33.0
+  KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+  KUBECTL_VERSION: v1.37.0
+  KUBECTL_SHA256: 6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f
+  HELM_VERSION: v3.19.0
+  HELM_SHA256: a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+  ACTIONLINT_VERSION: 1.7.12
+  ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+  HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
+  TERRAFORM_VERSION: 1.16.4
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Install helm, kubeconform, actionlint, kubectl
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  kubectl" | sha256sum -c
+          curl -fsSLo helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tgz" | sha256sum -c
+          curl -fsSLo kc.tgz "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kc.tgz" | sha256sum -c
+          curl -fsSLo al.tgz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  al.tgz" | sha256sum -c
+          tar xzf helm.tgz && tar xzf kc.tgz && tar xzf al.tgz
+          sudo install -m 0755 linux-amd64/helm kubeconform actionlint kubectl /usr/local/bin/
+      - name: actionlint
+        run: actionlint
+      - name: Install hadolint
+        # The image is the pinned artifact; copy its binary out for `make lint`.
+        run: |
+          id=$(docker create "$HADOLINT_IMAGE")
+          sudo docker cp "$id:/bin/hadolint" /usr/local/bin/hadolint
+          docker rm "$id" >/dev/null
+      - name: shellcheck
+        run: shellcheck -x scripts/*.sh
+      - name: hadolint, helm lint, render checks, kubeconform, terraform fmt/validate
+        # same target developers run locally
+        run: make lint
+      - name: lock files cover every platform
+        # providers lock adds any missing platform's hash; a diff means the
+        # committed lock file would fail `init` on that platform.
+        run: make tf-lock && git diff --exit-code -- 'infra/*/.terraform.lock.hcl'
+      - name: images are digest-pinned and multi-arch
+        run: scripts/check-images.sh
+
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: unit tests (vet + race), in the Dockerfile's test stage
+        run: docker build --target test .
+      - name: build
+        run: docker build --build-arg VERSION=ci-${{ github.sha }} -t greeter:ci .
+      - name: image properties
+        run: |
+          set -euo pipefail
+          user=$(docker image inspect greeter:ci --format '{{.Config.User}}')
+          size=$(docker image inspect greeter:ci --format '{{.Size}}')
+          echo "user=$user size=$size"
+          [ "$user" = "65532:65532" ]
+          [ "$size" -lt 20000000 ]
+          if docker run --rm greeter:ci; then echo "started without GREETING_NAME"; exit 1; fi
+      - name: arm64 cross-build
+        run: docker buildx build --platform linux/arm64 -t greeter:ci-arm64 .
+      - name: trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: greeter:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  e2e:
+    runs-on: ubuntu-24.04
+    needs: [static, image]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Install kind and kubectl
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSLo kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  kind" | sha256sum -c
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  kubectl" | sha256sum -c
+          sudo install -m 0755 kind kubectl /usr/local/bin/
+      - name: docker info (which image store this run exercised)
+        run: docker info
+      - name: make up (cluster, image, both environments, smoke test)
+        run: make up
+      - name: diagnostics
+        if: failure()
+        run: |
+          kubectl --context kind-greeter get pods -A -o wide || true
+          kubectl --context kind-greeter get events -A --sort-by=.lastTimestamp | tail -n 50 || true

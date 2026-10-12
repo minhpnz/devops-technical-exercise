@@ -45,3 +45,23 @@ plan:
 
 smoke:
 	@scripts/smoke.sh
+
+
+
+PLATFORMS := -platform=darwin_amd64 -platform=darwin_arm64 -platform=linux_amd64 -platform=linux_arm64
+
+.PHONY: lint tf-lock
+
+lint:
+	hadolint Dockerfile
+	shellcheck -x scripts/*.sh
+	helm lint charts/greeter --set greetingName=lint
+	@helm template x charts/greeter 2>&1 | grep -q "at '/greetingName'" || \
+	  { echo "chart must refuse to render without greetingName"; exit 1; }
+	helm template greeter charts/greeter --set greetingName=lint --set service.nodePort=30080 \
+	  | kubeconform -strict -summary -kubernetes-version 1.37.0 -
+	$(TF) fmt -recursive -check infra
+	@for e in $(ENVS); do (cd infra/$$e && $(TF) init -backend=false -input=false >/dev/null && $(TF) validate -no-color) || exit 1; done
+
+tf-lock:
+	@for e in $(ENVS); do (cd infra/$$e && $(TF) providers lock $(PLATFORMS)); done
