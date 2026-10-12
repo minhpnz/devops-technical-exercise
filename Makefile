@@ -25,3 +25,23 @@ image:
 
 load:
 	kind load docker-image $(IMAGE) --name $(CLUSTER)
+
+TF   := terraform
+ENVS := dev prod
+
+.PHONY: up deploy deploy-dev deploy-prod smoke plan
+
+up: cluster image load deploy smoke
+
+deploy: $(addprefix deploy-,$(ENVS))
+
+$(addprefix deploy-,$(ENVS)): deploy-%:
+	cd infra/$* && $(TF) init -input=false >/dev/null && \
+	  $(TF) apply -input=false -auto-approve $(if $(IMAGE_TAG),-var image_tag=$(IMAGE_TAG))
+
+plan:
+	@for e in $(ENVS); do echo "== $$e"; (cd infra/$$e && $(TF) init -input=false >/dev/null && \
+	  $(TF) plan -input=false -detailed-exitcode -compact-warnings | tail -n 3); done
+
+smoke:
+	@scripts/smoke.sh
