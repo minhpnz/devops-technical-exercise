@@ -1,0 +1,35 @@
+# Defaults that hold in every environment. Per-environment values (name,
+# replicas, image tag, node port) come from Terraform, not from files here.
+
+# Required. No default on purpose: the app refuses to start without it, and
+# rendering fails instead of shipping a pod that crash-loops.
+greetingName: ""
+
+replicas: 2
+
+image:
+  repository: greeter
+  # Defaults to the chart's appVersion.
+  tag: ""
+  # Images are side-loaded into kind, never pulled from a registry.
+  pullPolicy: IfNotPresent
+
+service:
+  # Must be one kind maps to the host (see kind/cluster.yaml). Empty = random.
+  nodePort: null
+
+# These mirror the app's own defaults, but are set explicitly because the
+# termination grace period is computed from them.
+timing:
+  warmupSeconds: 30
+  shutdownDelaySeconds: 10
+  drainTimeoutSeconds: 20
+  # Slack between the app's worst-case exit and SIGKILL.
+  terminationBufferSeconds: 5
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 64Mi

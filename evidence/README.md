@@ -1,11 +1,10 @@
 # Evidence
 
 Raw output from running this repository on one machine, kept so the claims in
-`DECISIONS.md` can be checked rather than taken on trust. Start with the table;
-each folder holds the output for one task.
+`DECISIONS.md` can be checked rather than taken on trust.
 
 **Machine:** macOS 26.6 (Intel, x86_64), Docker Engine 20.10.12 with a 6 vCPU / 6 GB VM,
-kind v0.33.0. Times in logs are UTC unless the line says otherwise.
+kind v0.33.0, Kubernetes v1.37.0. Times in logs are UTC unless the line says otherwise.
 
 **Conventions**
 
@@ -15,16 +14,33 @@ kind v0.33.0. Times in logs are UTC unless the line says otherwise.
 - Screenshots sit next to the logs they illustrate.
 - No credentials, kubeconfigs or Terraform state are stored here.
 
+## Layout
+
+```
+evidence/
+├── app-provisioning/   building and running the service (tasks 1-4); a reviewer can
+│   ├── docker-image/   reproduce all of it with `make up`, so this is supporting detail
+│   └── cluster/
+├── drills/             extension D: drain and rolling update under load
+├── ci/                 extension A
+├── alert/              extension B: the alert firing
+└── gitops/             extension C
+```
+
+`drills/`, `ci/`, `alert/` and `gitops/` are added as each extension is done; the
+index below lists only what exists.
+
 ## Index
 
-Listed in the order the work was done. GitHub sorts folders alphabetically, so
-use this table for the reading order.
+In the order the work was done. GitHub sorts folders alphabetically, so use this
+table for the reading order.
 
 | Phase | Folder | What it shows | Key result |
 |---|---|---|---|
-| 1 | [`docker-image/`](docker-image/) | The image handles SIGTERM the way the app intends: it reports not-ready, keeps serving for `SHUTDOWN_DELAY_SECONDS`, then drains in-flight requests | A 15 s `/work` request started before `docker stop` returned `200`; `closing listener` came 10 s after `signal received`; the container exited `0` |
+| 1 | [`app-provisioning/docker-image/`](app-provisioning/docker-image/) | The image handles SIGTERM the way the app intends: not-ready first, keeps serving for `SHUTDOWN_DELAY_SECONDS`, then drains in-flight requests | A 15 s request in flight during `docker stop` returned `200`; container exited `0` |
+| 2 | [`app-provisioning/cluster/`](app-provisioning/cluster/) | `make cluster` builds 1 control-plane + 3 workers from `kind/cluster.yaml`; the image is loaded into every node | 4 nodes Ready on v1.37.0 in 1m16s; control-plane tainted `NoSchedule`; image (9.57 MB) on all 4 nodes |
 
-## docker-image/
+## app-provisioning/docker-image/
 
 | File | Content |
 |---|---|
@@ -44,3 +60,18 @@ Timeline from the container log in `image-01.png`:
 `SHUTDOWN_DELAY_SECONDS` and would SIGKILL the process before it starts draining.
 For the same reason, Kubernetes' `terminationGracePeriodSeconds` has to be longer
 than delay + drain (10 + 20 s).
+
+## app-provisioning/cluster/
+
+| File | Content |
+|---|---|
+| `image-01.png` | `time make cluster`: kind creates the cluster with the pinned `kindest/node:v1.37.0` image and waits until all 4 nodes are Ready (1m16s wall clock) |
+| `image-02.png` | `kubectl get nodes -o wide`: 4 nodes Ready, v1.37.0, containerd 2.3.4. The control-plane taint `node-role.kubernetes.io/control-plane:NoSchedule`. kube-proxy in `iptables` mode. `127.0.0.1:30080` listening on the host |
+| `image-03.png` | `make image load`: the image is built, then `kind load` copies it into each of the 4 nodes' containerd; `crictl images` on a worker shows `greeter:0.1.0` (9.57 MB) |
+
+Notes:
+
+- The control-plane taint is why the chart's spread constraint uses
+  `nodeTaintsPolicy: Honor`: without it the control-plane counts as an empty domain.
+- Host ports are bound to `127.0.0.1` only, so the services aren't exposed on the
+  machine's network interfaces.
