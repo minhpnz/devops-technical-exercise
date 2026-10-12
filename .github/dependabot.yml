@@ -1,0 +1,19 @@
+# Pins don't patch themselves. Dependabot opens a PR when a pinned digest,
+# action SHA or provider version moves, and CI decides whether it's safe.
+version: 2
+updates:
+  # FROM image:tag@sha256:... - the tag and digest are bumped together.
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      base-images: { patterns: ["*"] }   # one PR for both FROM lines
+
+  # Actions are pinned by SHA with a "# vX.Y.Z" comment; Dependabot keeps both.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+
+  - package-ecosystem: terraform
+    directories: ["/infra/modules/greeter", "/infra/dev", "/infra/prod"]
+    schedule: { interval: weekly }
