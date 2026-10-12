@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitops
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git-server
+  namespace: gitops
+spec:
+  replicas: 1
+  # One pod with an emptyDir repo: never run two that could disagree.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: git-server}
+  template:
+    metadata:
+      labels: {app: git-server}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: git
+          image: {{ .Values.gitServer.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: repo, mountPath: /srv/git}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: repo, emptyDir: {}}
+        - {name: tmp, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: git-server
+  namespace: gitops
+spec:
+  selector: {app: git-server}
+  ports:
+    - {name: http, port: 80, targetPort: http}

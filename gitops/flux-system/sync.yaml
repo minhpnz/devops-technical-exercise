@@ -1,0 +1,36 @@
+# Applied once by hand (kubectl apply). Tells Flux which repository and folder
+# to reconcile; everything under gitops/apps is then owned by Flux.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: greeter
+  namespace: flux-system
+spec:
+  # SSH with a read-only deploy key held in the greeter-repo Secret (created
+  # by hand, never committed). Works the same whether the repo is private or public.
+  url: ssh://git@github.com/minhpnz/devops-technical-exercise
+  ref:
+    branch: solution
+  interval: 1m
+  secretRef:
+    name: greeter-repo
+  # Only what the releases need: the chart and the HelmReleases.
+  ignore: |
+    /*
+    !/charts/
+    !/gitops/apps/
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps
+  namespace: flux-system
+spec:
+  sourceRef:
+    kind: GitRepository
+    name: greeter
+  path: ./gitops/apps
+  interval: 10m
+  prune: true
+  wait: true
+  timeout: 5m
