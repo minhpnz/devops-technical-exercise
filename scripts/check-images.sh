@@ -13,9 +13,19 @@ list=$(mktemp)
   awk '/image: / {print $2}' kind/cluster.yaml
   # tooling images pinned in the Makefile (promtool)
   grep -hoE '[a-z0-9./_-]+(:[A-Za-z0-9._-]+)?@sha256:[a-f0-9]{64}' Makefile
+  # whatever the Prometheus release actually renders, sidecars included
+  ver=$(awk -F'"' '/^  version *= *"/ {print $2}' infra/monitoring/main.tf)
+  helm template prometheus prometheus --repo https://prometheus-community.github.io/helm-charts \
+    --version "$ver" -f monitoring/prometheus-values.yaml \
+    | awk '/image:/ {gsub(/"/, "", $2); print $2}'
 } | sort -u > "$list"
 
 fail=0
+# The config-reloader sidecar only comes from a successful render (promtool in
+# the Makefile is also quay.io/prometheus, so counting that prefix isn't enough).
+if ! grep -q prometheus-config-reloader "$list"; then
+  echo "FAIL could not render the Prometheus release's images"; fail=1
+fi
 while read -r ref; do
   case "$ref" in *@sha256:*) ;; *) echo "FAIL not digest-pinned: $ref"; fail=1; continue;; esac
   plats=$(docker buildx imagetools inspect "$ref" 2>/dev/null | awk '/Platform:/ {print $2}')

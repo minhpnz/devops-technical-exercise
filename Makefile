@@ -31,7 +31,7 @@ ENVS := dev prod
 
 .PHONY: up deploy deploy-dev deploy-prod smoke plan
 
-up: cluster image load deploy smoke
+up: cluster image load deploy monitoring smoke
 
 deploy: $(addprefix deploy-,$(ENVS))
 
@@ -40,7 +40,7 @@ $(addprefix deploy-,$(ENVS)): deploy-%:
 	  $(TF) apply -input=false -auto-approve $(if $(IMAGE_TAG),-var image_tag=$(IMAGE_TAG))
 
 plan:
-	@for e in $(ENVS); do echo "== $$e"; (cd infra/$$e && $(TF) init -input=false >/dev/null && \
+	@for e in $(ENVS) monitoring; do echo "== $$e"; (cd infra/$$e && $(TF) init -input=false >/dev/null && \
 	  $(TF) plan -input=false -detailed-exitcode -compact-warnings | tail -n 3); done
 
 smoke:
@@ -62,7 +62,18 @@ lint:
 	  | kubeconform -strict -summary -kubernetes-version 1.37.0 -
 	scripts/check-timing.sh
 	$(TF) fmt -recursive -check infra
-	@for e in $(ENVS); do (cd infra/$$e && $(TF) init -backend=false -input=false >/dev/null && $(TF) validate -no-color) || exit 1; done
+	@for e in $(ENVS) monitoring; do (cd infra/$$e && $(TF) init -backend=false -input=false >/dev/null && $(TF) validate -no-color) || exit 1; done
 
 tf-lock:
-	@for e in $(ENVS); do (cd infra/$$e && $(TF) providers lock $(PLATFORMS)); done
+	@for e in $(ENVS) monitoring; do (cd infra/$$e && $(TF) providers lock $(PLATFORMS)); done
+
+# Same image and digest as the Prometheus server deployed in infra/monitoring.
+PROMTOOL_IMAGE := quay.io/prometheus/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+
+.PHONY: rules-test monitoring
+rules-test:
+	docker run --rm -v "$(CURDIR)/monitoring:/m" -w /m --entrypoint promtool $(PROMTOOL_IMAGE) check rules alerts.yaml
+	docker run --rm -v "$(CURDIR)/monitoring:/m" -w /m --entrypoint promtool $(PROMTOOL_IMAGE) test rules alerts.test.yaml
+
+monitoring:
+	cd infra/monitoring && $(TF) init -input=false >/dev/null && $(TF) apply -input=false -auto-approve

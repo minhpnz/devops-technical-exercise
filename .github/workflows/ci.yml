@@ -70,6 +70,9 @@ jobs:
         run: make tf-lock && git diff --exit-code -- 'infra/*/.terraform.lock.hcl'
       - name: images are digest-pinned and multi-arch
         run: scripts/check-images.sh
+      - name: alert rule unit tests (promtool)
+        run: make rules-test
+
 
   image:
     runs-on: ubuntu-24.04

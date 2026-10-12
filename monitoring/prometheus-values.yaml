@@ -1,0 +1,75 @@
+# A single Prometheus server and nothing else. Everything the chart enables by
+# default that this exercise doesn't use is off.
+alertmanager:
+  enabled: false
+kube-state-metrics:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false
+
+configmapReload:
+  prometheus:
+    image:
+      repository: quay.io/prometheus-operator/prometheus-config-reloader
+      tag: v0.94.0
+      digest: sha256:142a1f11df8dd165f00375b0b1826aecb9c9adeb05c39855893138d7c7575ff7
+
+server:
+  image:
+    repository: quay.io/prometheus/prometheus
+    tag: v3.14.0
+    digest: sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+  global:
+    # The chart default is 1m, which leaves rate()[5m] with ~5 samples and
+    # starts an alert's pending period up to a minute late.
+    scrape_interval: 15s
+    evaluation_interval: 15s
+    scrape_timeout: 10s
+  retention: 2d
+  persistentVolume:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30090
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+# The chart builds scrape_configs from this map. Turn off its defaults
+# (apiserver, nodes, cadvisor, annotation-based pods/services...) and keep
+# Prometheus itself plus one job for the greeter pods.
+scrapeConfigs:
+  kubernetes-api-servers: {enabled: false}
+  kubernetes-nodes: {enabled: false}
+  kubernetes-nodes-cadvisor: {enabled: false}
+  kubernetes-pods: {enabled: false}
+  kubernetes-pods-slow: {enabled: false}
+  kubernetes-service-endpoints: {enabled: false}
+  kubernetes-service-endpoints-slow: {enabled: false}
+  kubernetes-services: {enabled: false}
+  prometheus-pushgateway: {enabled: false}
+  greeter:
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [greeter-dev, greeter-prod]
+    relabel_configs:
+      # Selected by the app chart's own labels and its named port, so the app
+      # needs no Prometheus-specific annotations.
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_name]
+        regex: greeter;http
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_phase]
+        regex: Pending|Running
+        action: keep
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: node

@@ -1,0 +1,58 @@
+# promtool test rules monitoring/alerts.test.yaml
+# Sampling matches the real scrape interval (15s): +75 per 15s is 5 req/s.
+rule_files:
+  - alerts.yaml
+evaluation_interval: 15s
+
+tests:
+  # 5 errors per second in prod: pending at first, firing once it has held for 30s.
+  - interval: 15s
+    input_series:
+      - series: 'greeter_http_requests_total{namespace="greeter-prod",path="/boom",method="GET",status="500"}'
+        values: '0+75x20'
+    alert_rule_test:
+      - eval_time: 15s
+        alertname: GreeterProdErrors
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: GreeterProdErrors
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "greeter prod: 5 errors per second"
+              description: >-
+                Prod has returned more than 1 5xx per second (excluding probes) for 30
+                seconds. Check recent rollouts first (kubectl -n greeter-prod rollout
+                history deploy/greeter), then which path is failing in Prometheus:
+                sum by (path, status) (rate(greeter_http_requests_total{namespace="greeter-prod", status=~"5.."}[1m]))
+
+  # The same errors in dev never page.
+  - interval: 15s
+    input_series:
+      - series: 'greeter_http_requests_total{namespace="greeter-dev",path="/boom",method="GET",status="500"}'
+        values: '0+75x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: GreeterProdErrors
+        exp_alerts: []
+
+  # Under the threshold: about 0.5 errors per second.
+  - interval: 15s
+    input_series:
+      - series: 'greeter_http_requests_total{namespace="greeter-prod",path="/boom",method="GET",status="500"}'
+        values: '0+8x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: GreeterProdErrors
+        exp_alerts: []
+
+  # A rollout: /readyz returns 503 while pods warm up and drain. Not an outage.
+  - interval: 15s
+    input_series:
+      - series: 'greeter_http_requests_total{namespace="greeter-prod",path="/readyz",method="GET",status="503"}'
+        values: '0+75x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: GreeterProdErrors
+        exp_alerts: []
